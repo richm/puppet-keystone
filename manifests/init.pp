@@ -131,6 +131,14 @@
 #   Tested versions include 0.9 and 2.2
 #   Default to '0.9'
 #
+#   [*use_wsgi*]
+#   (optional) Configure keystone and apache to use mod_wsgi
+#   If false, keystone will be configured as a standalone system
+#   service using eventlet
+#   If true, apache will be configured to use mod_wsgi to
+#   serve keystone
+#   Defaults to false
+#
 # == Dependencies
 #  None
 #
@@ -195,6 +203,7 @@ class keystone(
   $notification_driver   = false,
   $notification_topics   = false,
   $control_exchange      = false,
+  $use_wsgi              = false,
   # DEPRECATED PARAMETERS
   $sql_connection        = undef,
   $idle_timeout          = undef,
@@ -218,19 +227,19 @@ class keystone(
     $database_idle_timeout_real = $database_idle_timeout
   }
 
-  File['/etc/keystone/keystone.conf'] -> Keystone_config<||> ~> Service['keystone']
-  Keystone_config<||> ~> Exec<| title == 'keystone-manage db_sync'|>
-  Keystone_config<||> ~> Exec<| title == 'keystone-manage pki_setup'|>
-
-  include keystone::params
-
-  File {
-    ensure  => present,
-    owner   => 'keystone',
-    group   => 'keystone',
-    require => Package['keystone'],
-    notify  => Service['keystone'],
+  if $use_wsgi {
+    $_service = "httpd"
+  } else {
+    $_service = "keystone"
   }
+
+  File['/etc/keystone/keystone.conf'] -> Keystone_config<||> ~> Service[$_service]
+  # not sure why we have to do this here
+  # keystone::db::sync subscribes to Keystone_config['database/connection']
+  # we don't need to do a db sync every time any config parameter changes
+  #Keystone_config<||> ~> Exec<| title == 'keystone-manage db_sync'|>
+  Keystone_config<||> ~> Exec<| title == 'keystone-manage pki_setup'|>
+  include ::keystone::params
 
   package { 'keystone':
     ensure => $package_ensure,
@@ -253,10 +262,19 @@ class keystone(
   file { ['/etc/keystone', '/var/log/keystone', '/var/lib/keystone']:
     ensure  => directory,
     mode    => '0750',
+    owner   => 'keystone',
+    group   => 'keystone',
+    require => Package['keystone'],
+    notify  => Service[$_service],
   }
 
   file { '/etc/keystone/keystone.conf':
     mode    => '0600',
+    ensure  => present,
+    owner   => 'keystone',
+    group   => 'keystone',
+    require => Package['keystone'],
+    notify  => Service[$_service],
   }
 
   if $bind_host {
@@ -390,7 +408,7 @@ class keystone(
         user        => 'keystone',
         refreshonly => true,
         creates     => '/etc/keystone/ssl/private/signing_key.pem',
-        notify      => Service['keystone'],
+        notify      => Service[$_service],
         subscribe   => Package['keystone'],
         require     => User['keystone'],
       }
@@ -439,18 +457,24 @@ class keystone(
     $service_ensure = 'stopped'
   }
 
-  service { 'keystone':
-    ensure     => $service_ensure,
-    name       => $::keystone::params::service_name,
-    enable     => $enabled,
-    hasstatus  => true,
-    hasrestart => true,
-    provider   => $::keystone::params::service_provider,
+  if $_service == "keystone" {
+    service { 'keystone':
+      ensure     => $service_ensure,
+      name       => $::keystone::params::service_name,
+      enable     => $enabled,
+      hasstatus  => true,
+      hasrestart => true,
+      provider   => $::keystone::params::service_provider,
+    }
+  } else {
+    class { 'keystone::wsgi::apache':
+      ssl => $enable_ssl
+    }
   }
 
   if $enabled {
-    include keystone::db::sync
-    Class['keystone::db::sync'] ~> Service['keystone']
+    include ::keystone::db::sync
+    Class['keystone::db::sync'] ~> Service[$_service]
   }
 
   # Syslog configuration
