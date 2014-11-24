@@ -1,13 +1,15 @@
 $LOAD_PATH.push(File.join(File.dirname(__FILE__), '..', '..', '..'))
-require 'puppet/provider/keystone'
+require 'json'
+require 'puppet/feature/aviator'
+require 'puppet/provider/aviator'
+
 Puppet::Type.type(:keystone_user).provide(
-  :keystone,
-  :parent => Puppet::Provider::Keystone
+  :aviator,
+  :parent => Puppet::Provider::Aviator
 ) do
 
   desc <<-EOT
-    Provider that uses the keystone client tool to
-    manage keystone users
+    Provider that manages keystone users
 
     This provider makes a few assumptions/
       1. assumes that the admin endpoint can be accessed via localhost.
@@ -17,10 +19,8 @@ Puppet::Type.type(:keystone_user).provide(
     Does not support the ability to update the user's name
   EOT
 
-  optional_commands :keystone => "keystone"
-
   def self.prefetch(resource)
-    # rebuild the cahce for every puppet run
+    # rebuild the cache for every puppet run
     @user_hash = nil
   end
 
@@ -39,25 +39,20 @@ Puppet::Type.type(:keystone_user).provide(
   end
 
   def create
-    optional_opts = []
-    if resource[:email]
-      optional_opts.push('--email').push(resource[:email])
+    request(session.identity_service, :create_user) do |params|
+      params.name        = resource[:name]
+      params.enabled     = sym_to_bool(resource[:enabled])
+      if resource[:email]
+        params.email     = resource[:email]
+      end
+      if resource[:password]
+        params.password  = resource[:password]
+      end
+      if resource[:tenant]
+        params.project  = resource[:tenant]
+      end
+      params.description = resource[:description]
     end
-    if resource[:password]
-      optional_opts.push('--pass').push(resource[:password])
-    end
-    if resource[:tenant]
-      tenant_id = self.class.list_keystone_objects('tenant', 3).collect {|x|
-        x[0] if x[1] == resource[:tenant]
-      }.compact[0]
-      optional_opts.push('--tenant_id').push(tenant_id)
-    end
-    auth_keystone(
-      'user-create',
-      '--name', resource[:name],
-      '--enabled', resource[:enabled],
-      optional_opts
-    )
   end
 
   def exists?
@@ -65,7 +60,10 @@ Puppet::Type.type(:keystone_user).provide(
   end
 
   def destroy
-    auth_keystone('user-delete', user_hash[resource[:name]][:id])
+    request(session.identity_service, :delete_user) do |params|
+      params.id = id
+    end
+    user_hash.delete(resource[:name])
   end
 
   def enabled
@@ -73,11 +71,10 @@ Puppet::Type.type(:keystone_user).provide(
   end
 
   def enabled=(value)
-    auth_keystone(
-      "user-update",
-      '--enabled', value,
-      user_hash[resource[:name]][:id]
-    )
+    request(session.identity_service, :update_user) do |params|
+      params.enabled = sym_to_bool(value)
+      params.id = id
+    end
   end
 
   def password
@@ -86,7 +83,13 @@ Puppet::Type.type(:keystone_user).provide(
     # we can't get the value of the password but we can test to see if the one we know
     # about works, if it doesn't then return nil, causing it to be reset
     begin
-      token_out = creds_keystone(resource[:name], resource[:tenant], resource[:password], "token-get")
+      credentials = {
+        :username => resource[:name],
+        :password => resource[:password],
+        :tenant_name => resource[:tenant],
+        :host_uri => get_auth_url_from_keystone_file
+      }
+      session = get_authenticated_session(credentials)
     rescue Exception => e
       return nil if e.message =~ /Not Authorized/ or e.message =~ /HTTP 401/
       raise e
@@ -95,10 +98,17 @@ Puppet::Type.type(:keystone_user).provide(
   end
 
   def password=(value)
-    auth_keystone('user-password-update', '--pass', value, user_hash[resource[:name]][:id])
+    request(session.identity_service, :update_user) do |params|
+      params.password = value
+      params.id = id
+    end
   end
 
   def tenant
+    # TODO: this doesn't actually work because tenantId is (no longer?)
+    # a property of the user entry - the best way to do this is to use
+    # the keystone v3 api to list tenants for a user - so just leave
+    # this as is
     return resource[:tenant] if resource[:ignore_default_tenant]
     user_id = user_hash[resource[:name]][:id]
     begin
@@ -128,11 +138,10 @@ Puppet::Type.type(:keystone_user).provide(
   end
 
   def email=(value)
-    auth_keystone(
-      "user-update",
-      '--email', value,
-      user_hash[resource[:name]][:id]
-    )
+    request(session.identity_service, :update_user) do |params|
+      params.email = value
+      params.id = id
+    end
   end
 
   def id
@@ -142,18 +151,29 @@ Puppet::Type.type(:keystone_user).provide(
   private
 
     def self.build_user_hash
-      hash = {}
-      list_keystone_objects('user', 4).each do |user|
+      response = request(session.identity_service, :list_users)
+      list = response.body.hash['users']
+      list.collect do |user|
         password = 'nil'
         hash[user[1]] = {
-          :id          => user[0],
-          :enabled     => user[2],
-          :email       => user[3],
-          :name        => user[1],
+          :id          => user['id'],
+          :enabled     => user['enabled'],
+          :email       => user['email'],
+          :name        => user['name'],
+          :tenant      => user['project'],
           :password    => password,
         }
       end
       hash
+    end
+
+    # Helper functions to use on the pre-validated enabled field
+    def bool_to_sym(bool)
+      bool == true ? :true : :false
+    end
+
+    def sym_to_bool(sym)
+      sym == :true ? true : false
     end
 
 end

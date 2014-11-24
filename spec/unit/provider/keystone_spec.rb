@@ -139,6 +139,16 @@ describe Puppet::Provider::Keystone do
     end
   end
 
+  describe 'when testing authentication' do
+    it 'should fall back to keystone_request if openstack.request fails' do
+      # will call to get token and endpoint
+      klass.expects(:get_admin_token).returns('authtoken')
+      klass.expects(:get_admin_endpoint).returns('http://127.0.0.1:5000/v2.0')
+      klass.expects(:authenticate_request).with('user', 'set', ['foo', '--password', 'newpassword', '--os-token', 'authtoken', '--os-url', 'http://127.0.0.1:5000/v2.0'])
+      klass.request('user', 'set', ['--password', 'newpassword'], 'foo', {}).should == nil
+    end
+  end
+
   describe 'when parsing keystone objects' do
     it 'should parse valid output into a hash' do
       data = <<-EOT
