@@ -1,5 +1,4 @@
 $LOAD_PATH.push(File.join(File.dirname(__FILE__), '..', '..', '..'))
-require 'json'
 require 'puppet/feature/aviator'
 require 'puppet/provider/aviator'
 
@@ -41,7 +40,7 @@ Puppet::Type.type(:keystone_user).provide(
   def create
     request(session.identity_service, :create_user) do |params|
       params.name        = resource[:name]
-      params.enabled     = sym_to_bool(resource[:enabled])
+      params.enabled     = resource[:enabled]
       if resource[:email]
         params.email     = resource[:email]
       end
@@ -63,7 +62,6 @@ Puppet::Type.type(:keystone_user).provide(
     request(session.identity_service, :delete_user) do |params|
       params.id = id
     end
-    user_hash.delete(resource[:name])
   end
 
   def enabled
@@ -72,7 +70,7 @@ Puppet::Type.type(:keystone_user).provide(
 
   def enabled=(value)
     request(session.identity_service, :update_user) do |params|
-      params.enabled = sym_to_bool(value)
+      params.enabled = value
       params.id = id
     end
   end
@@ -151,6 +149,7 @@ Puppet::Type.type(:keystone_user).provide(
   private
 
     def self.build_user_hash
+      hash = {}
       response = request(session.identity_service, :list_users)
       list = response.body.hash['users']
       list.collect do |user|
@@ -165,15 +164,6 @@ Puppet::Type.type(:keystone_user).provide(
         }
       end
       hash
-    end
-
-    # Helper functions to use on the pre-validated enabled field
-    def bool_to_sym(bool)
-      bool == true ? :true : :false
-    end
-
-    def sym_to_bool(sym)
-      sym == :true ? true : false
     end
 
 end

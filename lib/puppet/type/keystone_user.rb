@@ -9,34 +9,24 @@ Puppet::Type.newtype(:keystone_user) do
     as well as the tenant are specified.
   EOT
 
-# TODO support description??
+  # TODO support description??
 
   ensurable
 
   newparam(:name, :namevar => true) do
-    desc 'The name of the user.'
     newvalues(/\S+/)
   end
 
   newparam(:ignore_default_tenant, :boolean => true) do
-    desc <<-EOT
-      If this is set, do not acutally perform a tenant lookup,
-      just use the value of tenant set in the user.
-      Defaults to false, meaning the tenant will be looked up
-    EOT
-    newvalues(/(t|T)rue/, /(f|F)alse/, true, false )
-    defaultto(false)
-    munge do |value|
-      value.to_s.downcase.to_sym
-    end
+    newvalues(:true, :false)
+    defaultto false
   end
 
   newproperty(:enabled) do
-    desc 'Whether the user should be enabled. Defaults to true.'
-    newvalues(/(t|T)rue/, /(f|F)alse/, true, false)
-    defaultto(true)
+    newvalues(/(t|T)rue/, /(f|F)alse/)
+    defaultto('True')
     munge do |value|
-      value.to_s.downcase.to_sym
+      value.to_s.capitalize
     end
   end
 
